@@ -14,6 +14,9 @@ public class BackupWindow : Box {
     // Referencja do głównego systemu
     private BackupSystem backup_system;
     
+    // Integracja z chmurą
+    private CloudIntegration? cloud_integration;
+    
     // Checkboxy opcji backupu
     private CheckButton backup_packages_check;
     private CheckButton backup_system_config_check;
@@ -50,6 +53,9 @@ public class BackupWindow : Box {
         
         // Aktualizacja listy katalogów
         update_custom_dirs_list();
+        
+        // Inicjalizacja integracji z chmurą
+        setup_cloud_integration();
     }
     
     /**
@@ -367,6 +373,92 @@ public class BackupWindow : Box {
             progress_label.set_text(text);
             return false;
         });
+    }
+    
+    /**
+     * Konfiguruje integrację z chmurą
+     */
+    private void setup_cloud_integration() {
+        cloud_integration = new CloudIntegration();
+        
+        // Połączenie sygnałów
+        cloud_integration.error_occurred.connect(on_cloud_error);
+        cloud_integration.success_occurred.connect(on_cloud_success);
+        cloud_integration.progress_updated.connect(on_cloud_progress);
+    }
+    
+    /**
+     * Obsługa błędów z chmury
+     */
+    private void on_cloud_error(string title, string message) {
+        Idle.add(() => {
+            var main_window = get_toplevel() as MainWindow;
+            if (main_window != null) {
+                main_window.show_error_dialog(title, message);
+            }
+            return false;
+        });
+    }
+    
+    /**
+     * Obsługa sukcesów z chmury
+     */
+    private void on_cloud_success(string title, string message) {
+        Idle.add(() => {
+            var main_window = get_toplevel() as MainWindow;
+            if (main_window != null) {
+                main_window.show_info_dialog(title, message);
+            }
+            return false;
+        });
+    }
+    
+    /**
+     * Obsługa postępu operacji w chmurze
+     */
+    private void on_cloud_progress(double fraction, string status) {
+        Idle.add(() => {
+            progress_bar.fraction = fraction;
+            progress_label.set_text(status);
+            return false;
+        });
+    }
+    
+    /**
+     * Testuje połączenie z Dropbox
+     */
+    public void test_dropbox_connection() {
+        if (cloud_integration != null) {
+            new Thread<void*>("dropbox-test-thread", () => {
+                var success = cloud_integration.test_connection();
+                
+                Idle.add(() => {
+                    var main_window = get_toplevel() as MainWindow;
+                    if (main_window != null) {
+                        if (success) {
+                            main_window.show_info_dialog("Test połączenia", "Połączenie z Dropbox działa poprawnie.");
+                        } else {
+                            main_window.show_error_dialog("Test połączenia", "Nie udało się połączyć z Dropbox. Sprawdź konfigurację.");
+                        }
+                    }
+                    return false;
+                });
+                
+                return null;
+            });
+        }
+    }
+    
+    /**
+     * Wykonuje upload backupu do Dropbox
+     */
+    public void upload_backup_to_dropbox(string backup_path) {
+        if (cloud_integration != null) {
+            new Thread<void*>("dropbox-upload-thread", () => {
+                cloud_integration.upload_to_dropbox(backup_path);
+                return null;
+            });
+        }
     }
     
     /**

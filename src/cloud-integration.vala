@@ -11,6 +11,11 @@ using Gtk;
 
 public class CloudIntegration : GLib.Object {
     
+    // Sygnały do komunikacji z GUI
+    public signal void error_occurred(string title, string message);
+    public signal void success_occurred(string title, string message);
+    public signal void progress_updated(double fraction, string status);
+    
     // Konfiguracja chmury
     private CloudConfig config;
     
@@ -243,44 +248,109 @@ public class CloudIntegration : GLib.Object {
     }
     
     /**
-     * Upload pliku do Dropbox
+     * Upload pliku do Dropbox z pełnym logowaniem i obsługą błędów
      */
     public bool upload_to_dropbox(string local_file_path, string? remote_path = null) {
         try {
-            logger.log(LogLevel.INFO, "Rozpoczęcie uploadu do Dropbox: " + local_file_path);
+            logger.log(LogLevel.INFO, "[DROPBOX] Rozpoczęcie uploadu: " + local_file_path);
             
+            // Krok 1: Sprawdzenie czy Dropbox jest włączony
             if (!config.dropbox_enabled) {
-                logger.log(LogLevel.WARNING, "Integracja z Dropbox jest wyłączona");
+                logger.log(LogLevel.ERROR, "[DROPBOX] Integracja z Dropbox jest wyłączona w konfiguracji");
+                show_error_message("Dropbox nie jest włączony", "Integracja z Dropbox jest wyłączona w ustawieniach.");
                 return false;
             }
             
+            // Krok 2: Walidacja pliku lokalnego
+            logger.log(LogLevel.INFO, "[DROPBOX] Sprawdzanie istnienia pliku lokalnego...");
             var file = File.new_for_path(local_file_path);
             
             if (!file.query_exists()) {
-                logger.log(LogLevel.ERROR, "Plik nie istnieje: " + local_file_path);
+                logger.log(LogLevel.ERROR, "[DROPBOX] Plik nie istnieje: " + local_file_path);
+                show_error_message("Plik nie istnieje", "Nie można znaleźć pliku do uploadu: " + local_file_path);
                 return false;
             }
             
-            if (config.dropbox_access_token == "") {
-                logger.log(LogLevel.ERROR, "Brak tokenu Dropbox");
+            // Krok 3: Sprawdzenie rozmiaru pliku
+            var file_info = file.query_info("standard::size", FileQueryInfoFlags.NONE);
+            var file_size = file_info.get_size();
+            logger.log(LogLevel.INFO, "[DROPBOX] Rozmiar pliku: " + format_file_size(file_size));
+            
+            if (file_size > 150 * 1024 * 1024) { // 150MB limit dla pojedynczego uploadu
+                logger.log(LogLevel.ERROR, "[DROPBOX] Plik zbyt duży (>150MB): " + format_file_size(file_size));
+                show_error_message("Plik zbyt duży", "Dropbox nie obsługuje plików większych niż 150MB w pojedynczym uploadzie.");
                 return false;
             }
             
+            // Krok 4: Walidacja tokenu OAuth2
+            logger.log(LogLevel.INFO, "[DROPBOX] Sprawdzanie tokenu OAuth2...");
+            if (config.dropbox_access_token == null || config.dropbox_access_token.strip() == "") {
+                logger.log(LogLevel.ERROR, "[DROPBOX] Brak tokenu OAuth2 lub token jest pusty");
+                show_error_message("Brak autoryzacji", "Token OAuth2 dla Dropbox nie jest skonfigurowany. Skonfiguruj token w ustawieniach.");
+                return false;
+            }
+            
+            if (config.dropbox_access_token.length < 20) {
+                logger.log(LogLevel.ERROR, "[DROPBOX] Token OAuth2 wydaje się nieprawidłowy (zbyt krótki): " + config.dropbox_access_token.length.to_string() + " znaków");
+                show_error_message("Nieprawidłowy token", "Token OAuth2 dla Dropbox wydaje się nieprawidłowy.");
+                return false;
+            }
+            
+            logger.log(LogLevel.INFO, "[DROPBOX] Token OAuth2 zwalidowany (długość: " + config.dropbox_access_token.length.to_string() + " znaków)");
+            
+            // Krok 5: Przygotowanie ścieżki zdalnej
             var filename = remote_path ?? Path.get_basename(local_file_path);
+            if (!filename.has_prefix("/")) {
+                filename = "/" + filename;
+            }
+            logger.log(LogLevel.INFO, "[DROPBOX] Ścieżka zdalna: " + filename);
             
-            // Upload przez Dropbox API v2
+            // Krok 6: Sprawdzenie dostępności curl
+            logger.log(LogLevel.INFO, "[DROPBOX] Sprawdzanie dostępności curl...");
+            string curl_version;
+            int curl_check_status;
+            try {
+                Process.spawn_command_line_sync("curl --version", out curl_version, null, out curl_check_status);
+                if (curl_check_status != 0) {
+                    logger.log(LogLevel.ERROR, "[DROPBOX] curl nie jest zainstalowany lub niedostępny");
+                    show_error_message("Brak curl", "Narzędzie curl nie jest zainstalowane. Zainstaluj curl: sudo dnf install curl");
+                    return false;
+                }
+                logger.log(LogLevel.INFO, "[DROPBOX] curl dostępny: " + curl_version.split("\n")[0]);
+            } catch (Error e) {
+                logger.log(LogLevel.ERROR, "[DROPBOX] Błąd sprawdzania curl: " + e.message);
+                show_error_message("Błąd curl", "Nie można sprawdzić dostępności curl: " + e.message);
+                return false;
+            }
+            
+            // Krok 7: Przygotowanie API call do Dropbox
+            logger.log(LogLevel.INFO, "[DROPBOX] Przygotowywanie żądania API...");
+            
+            var api_arg = "{\"path\":\"" + filename + "\",\"mode\":\"overwrite\",\"autorename\":false}";
+            logger.log(LogLevel.INFO, "[DROPBOX] Dropbox-API-Arg: " + api_arg);
+            
             string[] curl_cmd = {
                 "curl",
                 "-X", "POST",
                 "-H", "Authorization: Bearer " + config.dropbox_access_token,
-                "-H", "Dropbox-API-Arg: {\"path\":\"/" + filename + "\"}",
+                "-H", "Dropbox-API-Arg: " + api_arg,
                 "-H", "Content-Type: application/octet-stream",
                 "--data-binary", "@" + local_file_path,
+                "--connect-timeout", "30",
+                "--max-time", "300",
+                "-w", "HTTP_CODE:%{http_code}\nTIME_TOTAL:%{time_total}\n",
                 "https://content.dropboxapi.com/2/files/upload"
             };
             
+            // Krok 8: Wykonanie uploadu z progress reporting
+            logger.log(LogLevel.INFO, "[DROPBOX] Wykonywanie uploadu...");
+            update_progress(0.1, "Rozpoczynanie uploadu do Dropbox...");
+            
             string stdout, stderr;
             int exit_status;
+            
+            update_progress(0.3, "Połączenie z serwerem Dropbox...");
+            
             Process.spawn_sync(
                 null,
                 curl_cmd,
@@ -292,16 +362,25 @@ public class CloudIntegration : GLib.Object {
                 out exit_status
             );
             
-            if (exit_status == 0) {
-                logger.log(LogLevel.INFO, "Upload do Dropbox zakończony pomyślnie");
-                return true;
-            } else {
-                logger.log(LogLevel.ERROR, "Błąd uploadu Dropbox: " + stderr);
-                return false;
+            update_progress(0.9, "Przetwarzanie odpowiedzi serwera...");
+            
+            // Krok 9: Analiza odpowiedzi
+            logger.log(LogLevel.INFO, "[DROPBOX] Exit status: " + exit_status.to_string());
+            logger.log(LogLevel.INFO, "[DROPBOX] Stdout: " + stdout);
+            if (stderr != null && stderr.strip() != "") {
+                logger.log(LogLevel.WARNING, "[DROPBOX] Stderr: " + stderr);
             }
             
+            if (exit_status != 0) {
+                return handle_dropbox_curl_error(exit_status, stderr);
+            }
+            
+            // Krok 10: Parsowanie odpowiedzi HTTP
+            return parse_dropbox_response(stdout);
+            
         } catch (Error e) {
-            logger.log(LogLevel.ERROR, "Błąd podczas uploadu do Dropbox: " + e.message);
+            logger.log(LogLevel.ERROR, "[DROPBOX] Wyjątek podczas uploadu: " + e.message);
+            show_error_message("Błąd uploadu", "Nieoczekiwany błąd podczas uploadu do Dropbox: " + e.message);
             return false;
         }
     }
@@ -513,20 +592,230 @@ public class CloudIntegration : GLib.Object {
     }
     
     /**
+     * Obsługuje błędy curl dla Dropbox
+     */
+    private bool handle_dropbox_curl_error(int exit_status, string stderr) {
+        string error_msg = "";
+        string user_msg = "";
+        
+        switch (exit_status) {
+            case 6:
+                error_msg = "Nie można połączyć się z serwerem Dropbox";
+                user_msg = "Sprawdź połączenie internetowe i spróbuj ponownie.";
+                break;
+            case 7:
+                error_msg = "Nie można połączyć się z hostem";
+                user_msg = "Serwer Dropbox jest niedostępny. Spróbuj później.";
+                break;
+            case 22:
+                error_msg = "HTTP error (prawdopodobnie błąd autoryzacji)";
+                user_msg = "Sprawdź token OAuth2 w ustawieniach Dropbox.";
+                break;
+            case 28:
+                error_msg = "Timeout podczas uploadu";
+                user_msg = "Upload trwał zbyt długo. Sprawdź połączenie lub zmniejsz rozmiar pliku.";
+                break;
+            case 35:
+                error_msg = "Błąd SSL/TLS";
+                user_msg = "Problem z bezpiecznym połączeniem. Sprawdź ustawienia sieci.";
+                break;
+            default:
+                error_msg = "Nieznany błąd curl (kod: " + exit_status.to_string() + ")";
+                user_msg = "Nieoczekiwany błąd sieci. Szczegóły w logach.";
+                break;
+        }
+        
+        logger.log(LogLevel.ERROR, "[DROPBOX] " + error_msg + ": " + stderr);
+        show_error_message("Błąd połączenia", user_msg);
+        return false;
+    }
+    
+    /**
+     * Parsuje odpowiedź z Dropbox API
+     */
+    private bool parse_dropbox_response(string response) {
+        try {
+            // Wyciągnięcie kodu HTTP z odpowiedzi curl
+            var lines = response.split("\n");
+            string http_code = "";
+            string time_total = "";
+            string json_response = "";
+            
+            foreach (var line in lines) {
+                if (line.has_prefix("HTTP_CODE:")) {
+                    http_code = line.substring(10);
+                } else if (line.has_prefix("TIME_TOTAL:")) {
+                    time_total = line.substring(11);
+                } else if (line.strip() != "" && !line.has_prefix("HTTP_CODE:") && !line.has_prefix("TIME_TOTAL:")) {
+                    json_response += line;
+                }
+            }
+            
+            logger.log(LogLevel.INFO, "[DROPBOX] Kod HTTP: " + http_code);
+            logger.log(LogLevel.INFO, "[DROPBOX] Czas uploadu: " + time_total + "s");
+            
+            var code = int.parse(http_code);
+            
+            if (code >= 200 && code < 300) {
+                logger.log(LogLevel.INFO, "[DROPBOX] Upload zakończony pomyślnie (HTTP " + http_code + ")");
+                
+                // Parsowanie odpowiedzi JSON dla dodatkowych informacji
+                if (json_response != "") {
+                    try {
+                        var parser = new Json.Parser();
+                        parser.load_from_data(json_response);
+                        var root = parser.get_root();
+                        
+                        if (root != null && root.get_node_type() == Json.NodeType.OBJECT) {
+                            var obj = root.get_object();
+                            if (obj.has_member("name")) {
+                                var uploaded_name = obj.get_string_member("name");
+                                logger.log(LogLevel.INFO, "[DROPBOX] Plik zapisany jako: " + uploaded_name);
+                            }
+                            if (obj.has_member("size")) {
+                                var uploaded_size = obj.get_int_member("size");
+                                logger.log(LogLevel.INFO, "[DROPBOX] Rozmiar zapisanego pliku: " + format_file_size(uploaded_size));
+                            }
+                        }
+                    } catch (Error e) {
+                        logger.log(LogLevel.WARNING, "[DROPBOX] Nie można sparsować odpowiedzi JSON: " + e.message);
+                    }
+                }
+                
+                update_progress(1.0, "Upload do Dropbox zakończony pomyślnie!");
+                show_success_message("Upload zakończony", "Plik został pomyślnie wysłany do Dropbox.");
+                return true;
+            } else {
+                return handle_dropbox_http_error(code, json_response);
+            }
+            
+        } catch (Error e) {
+            logger.log(LogLevel.ERROR, "[DROPBOX] Błąd parsowania odpowiedzi: " + e.message);
+            show_error_message("Błąd odpowiedzi", "Nie można przetworzyć odpowiedzi z serwera Dropbox.");
+            return false;
+        }
+    }
+    
+    /**
+     * Obsługuje błędy HTTP z Dropbox API
+     */
+    private bool handle_dropbox_http_error(int http_code, string json_response) {
+        string error_msg = "";
+        string user_msg = "";
+        
+        switch (http_code) {
+            case 400:
+                error_msg = "Błędne żądanie (Bad Request)";
+                user_msg = "Nieprawidłowe parametry uploadu. Sprawdź nazwę pliku.";
+                break;
+            case 401:
+                error_msg = "Brak autoryzacji (Unauthorized)";
+                user_msg = "Token OAuth2 jest nieprawidłowy lub wygasł. Wygeneruj nowy token.";
+                break;
+            case 403:
+                error_msg = "Brak uprawnień (Forbidden)";
+                user_msg = "Token nie ma uprawnień do zapisu plików. Sprawdź uprawnienia aplikacji.";
+                break;
+            case 409:
+                error_msg = "Konflikt (plik już istnieje)";
+                user_msg = "Plik o tej nazwie już istnieje w Dropbox.";
+                break;
+            case 413:
+                error_msg = "Plik zbyt duży (Payload Too Large)";
+                user_msg = "Plik przekracza maksymalny rozmiar dla Dropbox (150MB).";
+                break;
+            case 429:
+                error_msg = "Zbyt wiele żądań (Rate Limited)";
+                user_msg = "Przekroczono limit żądań API. Poczekaj chwilę i spróbuj ponownie.";
+                break;
+            case 507:
+                error_msg = "Brak miejsca na dysku (Insufficient Storage)";
+                user_msg = "Brak miejsca na koncie Dropbox. Usuń niepotrzebne pliki.";
+                break;
+            case 500:
+            case 502:
+            case 503:
+                error_msg = "Błąd serwera Dropbox (" + http_code.to_string() + ")";
+                user_msg = "Tymczasowy problem z serwerem Dropbox. Spróbuj później.";
+                break;
+            default:
+                error_msg = "Nieznany błąd HTTP (" + http_code.to_string() + ")";
+                user_msg = "Nieoczekiwany błąd serwera. Szczegóły w logach.";
+                break;
+        }
+        
+        logger.log(LogLevel.ERROR, "[DROPBOX] " + error_msg + " (HTTP " + http_code.to_string() + ")");
+        
+        // Próba parsowania szczegółowego błędu z JSON
+        if (json_response != "") {
+            try {
+                var parser = new Json.Parser();
+                parser.load_from_data(json_response);
+                var root = parser.get_root();
+                
+                if (root != null && root.get_node_type() == Json.NodeType.OBJECT) {
+                    var obj = root.get_object();
+                    if (obj.has_member("error_summary")) {
+                        var error_summary = obj.get_string_member("error_summary");
+                        logger.log(LogLevel.ERROR, "[DROPBOX] Szczegóły błędu: " + error_summary);
+                    }
+                }
+            } catch (Error e) {
+                logger.log(LogLevel.WARNING, "[DROPBOX] Nie można sparsować błędu JSON: " + e.message);
+            }
+        }
+        
+        show_error_message("Błąd Dropbox", user_msg);
+        return false;
+    }
+    
+    /**
      * Testuje połączenie z Dropbox
      */
     private bool test_dropbox_connection() {
         try {
-            // TODO: Implementacja testu połączenia z Dropbox
-            // INSTRUKCJA INTEGRACJI:
-            // 1. Zweryfikuj token dostępu
-            // 2. Sprawdź uprawnienia do Dropbox API
-            // 3. Sprawdź limity API
+            logger.log(LogLevel.INFO, "[DROPBOX] Testowanie połączenia...");
             
-            return true;
+            if (config.dropbox_access_token == null || config.dropbox_access_token.strip() == "") {
+                logger.log(LogLevel.ERROR, "[DROPBOX] Brak tokenu OAuth2");
+                return false;
+            }
+            
+            // Test przez sprawdzenie informacji o koncie
+            string[] curl_cmd = {
+                "curl",
+                "-X", "POST",
+                "-H", "Authorization: Bearer " + config.dropbox_access_token,
+                "-H", "Content-Type: application/json",
+                "-d", "null",
+                "--connect-timeout", "10",
+                "https://api.dropboxapi.com/2/users/get_current_account"
+            };
+            
+            string stdout, stderr;
+            int exit_status;
+            
+            Process.spawn_sync(
+                null,
+                curl_cmd,
+                null,
+                SpawnFlags.SEARCH_PATH,
+                null,
+                out stdout,
+                out stderr,
+                out exit_status
+            );
+            
+            if (exit_status == 0 && stdout.contains("account_id")) {
+                logger.log(LogLevel.INFO, "[DROPBOX] Test połączenia zakończony pomyślnie");
+                return true;
+            } else {
+                logger.log(LogLevel.ERROR, "[DROPBOX] Test połączenia nieudany: " + stderr);
+                return false;
+            }
             
         } catch (Error e) {
-            logger.log(LogLevel.ERROR, "Błąd testu połączenia z Dropbox: " + e.message);
+            logger.log(LogLevel.ERROR, "[DROPBOX] Błąd testu połączenia: " + e.message);
             return false;
         }
     }
@@ -570,6 +859,45 @@ public class CloudIntegration : GLib.Object {
         config = new_config;
         save_config();
         logger.log(LogLevel.INFO, "Zaktualizowano konfigurację integracji z chmurą");
+    }
+    
+    /**
+     * Formatuje rozmiar pliku
+     */
+    private string format_file_size(int64 size) {
+        if (size < 1024) {
+            return size.to_string() + " B";
+        } else if (size < 1024 * 1024) {
+            return "%.1f KB".printf(size / 1024.0);
+        } else if (size < 1024 * 1024 * 1024) {
+            return "%.1f MB".printf(size / (1024.0 * 1024.0));
+        } else {
+            return "%.1f GB".printf(size / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+    
+    /**
+     * Wyświetla komunikat o błędzie w GUI
+     */
+    private void show_error_message(string title, string message) {
+        logger.log(LogLevel.ERROR, "[GUI] " + title + ": " + message);
+        error_occurred(title, message);
+    }
+    
+    /**
+     * Wyświetla komunikat o sukcesie w GUI
+     */
+    private void show_success_message(string title, string message) {
+        logger.log(LogLevel.INFO, "[GUI] " + title + ": " + message);
+        success_occurred(title, message);
+    }
+    
+    /**
+     * Aktualizuje postęp operacji
+     */
+    private void update_progress(double fraction, string status) {
+        logger.log(LogLevel.INFO, "[PROGRESS] " + (fraction * 100).to_string() + "% - " + status);
+        progress_updated(fraction, status);
     }
     
     /**
