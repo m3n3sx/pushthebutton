@@ -164,15 +164,50 @@ public class CloudIntegration : GLib.Object {
                 return false;
             }
             
-            // TODO: Implementacja uploadu do Google Drive
-            // INSTRUKCJA INTEGRACJI:
-            // 1. Zainstaluj: pip install google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
-            // 2. Skonfiguruj OAuth 2.0 w Google Cloud Console
-            // 3. Użyj Google Drive API do uploadu
-            // 4. Obsłuż błędy autoryzacji i limity API
+            var file = File.new_for_path(local_file_path);
             
-            logger.log(LogLevel.INFO, "Upload do Google Drive zakończony pomyślnie (placeholder)");
-            return true;
+            if (!file.query_exists()) {
+                logger.log(LogLevel.ERROR, "Plik nie istnieje: " + local_file_path);
+                return false;
+            }
+            
+            if (config.google_drive_token == "") {
+                logger.log(LogLevel.ERROR, "Brak tokenu Google Drive");
+                return false;
+            }
+            
+            var filename = Path.get_basename(local_file_path);
+            
+            // Upload przez Google Drive API v3
+            string[] curl_cmd = {
+                "curl",
+                "-X", "POST",
+                "-H", "Authorization: Bearer " + config.google_drive_token,
+                "-F", "metadata={\"name\":\"" + filename + "\"};type=application/json;charset=UTF-8",
+                "-F", "file=@" + local_file_path,
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+            };
+            
+            string stdout, stderr;
+            int exit_status;
+            Process.spawn_sync(
+                null,
+                curl_cmd,
+                null,
+                SpawnFlags.SEARCH_PATH,
+                null,
+                out stdout,
+                out stderr,
+                out exit_status
+            );
+            
+            if (exit_status == 0) {
+                logger.log(LogLevel.INFO, "Upload do Google Drive zakończony pomyślnie");
+                return true;
+            } else {
+                logger.log(LogLevel.ERROR, "Błąd uploadu Google Drive: " + stderr);
+                return false;
+            }
             
         } catch (Error e) {
             logger.log(LogLevel.ERROR, "Błąd podczas uploadu do Google Drive: " + e.message);
@@ -219,15 +254,51 @@ public class CloudIntegration : GLib.Object {
                 return false;
             }
             
-            // TODO: Implementacja uploadu do Dropbox
-            // INSTRUKCJA INTEGRACJI:
-            // 1. Zainstaluj: pip install dropbox
-            // 2. Skonfiguruj token dostępu w cloud_config.json
-            // 3. Użyj Dropbox API do uploadu
-            // 4. Obsłuż błędy autoryzacji i limity API
+            var file = File.new_for_path(local_file_path);
             
-            logger.log(LogLevel.INFO, "Upload do Dropbox zakończony pomyślnie (placeholder)");
-            return true;
+            if (!file.query_exists()) {
+                logger.log(LogLevel.ERROR, "Plik nie istnieje: " + local_file_path);
+                return false;
+            }
+            
+            if (config.dropbox_access_token == "") {
+                logger.log(LogLevel.ERROR, "Brak tokenu Dropbox");
+                return false;
+            }
+            
+            var filename = remote_path ?? Path.get_basename(local_file_path);
+            
+            // Upload przez Dropbox API v2
+            string[] curl_cmd = {
+                "curl",
+                "-X", "POST",
+                "-H", "Authorization: Bearer " + config.dropbox_access_token,
+                "-H", "Dropbox-API-Arg: {\"path\":\"/" + filename + "\"}",
+                "-H", "Content-Type: application/octet-stream",
+                "--data-binary", "@" + local_file_path,
+                "https://content.dropboxapi.com/2/files/upload"
+            };
+            
+            string stdout, stderr;
+            int exit_status;
+            Process.spawn_sync(
+                null,
+                curl_cmd,
+                null,
+                SpawnFlags.SEARCH_PATH,
+                null,
+                out stdout,
+                out stderr,
+                out exit_status
+            );
+            
+            if (exit_status == 0) {
+                logger.log(LogLevel.INFO, "Upload do Dropbox zakończony pomyślnie");
+                return true;
+            } else {
+                logger.log(LogLevel.ERROR, "Błąd uploadu Dropbox: " + stderr);
+                return false;
+            }
             
         } catch (Error e) {
             logger.log(LogLevel.ERROR, "Błąd podczas uploadu do Dropbox: " + e.message);

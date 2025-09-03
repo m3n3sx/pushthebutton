@@ -701,8 +701,14 @@ public class BackupManager : GLib.Object {
             generator.set_root(new Json.Node.alloc().init_object(metadata));
             generator.to_file(metadata_file.get_path());
             
-            logger.log(LogLevel.INFO, "Pełny backup zakończony pomyślnie: " + backup_path);
-            return backup_path;
+            // Kompresja backupu
+            if (compress_backup(backup_path)) {
+                logger.log(LogLevel.INFO, "Pełny backup zakończony pomyślnie: " + backup_path);
+                return backup_path;
+            } else {
+                logger.log(LogLevel.WARNING, "Backup utworzony ale kompresja nie powiodła się: " + backup_path);
+                return backup_path;
+            }
             
         } catch (Error e) {
             logger.log(LogLevel.ERROR, "Błąd podczas tworzenia pełnego backupu: " + e.message);
@@ -739,6 +745,76 @@ public class BackupManager : GLib.Object {
         } catch (Error e) {
             return "Unknown";
         }
+    }
+    
+    /**
+     * Kompresuje backup do archiwum tar.gz
+     */
+    private bool compress_backup(string backup_path) {
+        try {
+            logger.log(LogLevel.INFO, "Rozpoczęcie kompresji backupu: " + backup_path);
+            
+            var backup_name = Path.get_basename(backup_path);
+            var parent_dir = Path.get_dirname(backup_path);
+            var archive_path = backup_path + ".tar.gz";
+            
+            string[] tar_cmd = {
+                "tar",
+                "-czf",
+                archive_path,
+                "-C",
+                parent_dir,
+                backup_name
+            };
+            
+            string stdout, stderr;
+            int exit_status;
+            Process.spawn_sync(
+                null,
+                tar_cmd,
+                null,
+                SpawnFlags.SEARCH_PATH,
+                null,
+                out stdout,
+                out stderr,
+                out exit_status
+            );
+            
+            if (exit_status == 0) {
+                logger.log(LogLevel.INFO, "Kompresja backupu zakończona: " + archive_path);
+                
+                // Usuń nieskompresowany katalog
+                var backup_dir = File.new_for_path(backup_path);
+                delete_directory_recursive(backup_dir);
+                
+                return true;
+            } else {
+                logger.log(LogLevel.ERROR, "Błąd kompresji backupu: " + stderr);
+                return false;
+            }
+            
+        } catch (Error e) {
+            logger.log(LogLevel.ERROR, "Błąd podczas kompresji backupu: " + e.message);
+            return false;
+        }
+    }
+    
+    /**
+     * Usuwa katalog rekurencyjnie
+     */
+    private void delete_directory_recursive(File dir) throws Error {
+        var enumerator = dir.enumerate_children("standard::*", FileQueryInfoFlags.NONE);
+        FileInfo info;
+        
+        while ((info = enumerator.next_file()) != null) {
+            var child = dir.get_child(info.get_name());
+            if (info.get_file_type() == FileType.DIRECTORY) {
+                delete_directory_recursive(child);
+            } else {
+                child.delete();
+            }
+        }
+        dir.delete();
     }
     
     /**

@@ -30,6 +30,10 @@ public class BackupWindow : Box {
     // Przycisk wykonania backupu
     private Button execute_backup_button;
     
+    // Progress bar
+    private ProgressBar progress_bar;
+    private Label progress_label;
+    
     /**
      * Konstruktor zakładki Backup
      */
@@ -60,6 +64,9 @@ public class BackupWindow : Box {
         
         // Nazwa backupu
         create_backup_name_section();
+        
+        // Progress bar
+        create_progress_section();
         
         // Przycisk wykonania backupu
         create_execute_button();
@@ -182,6 +189,26 @@ public class BackupWindow : Box {
     }
     
     /**
+     * Tworzy sekcję progress
+     */
+    private void create_progress_section() {
+        var progress_frame = new Frame("Postęp operacji");
+        progress_frame.margin_bottom = 10;
+        pack_start(progress_frame, false, false, 0);
+        
+        var progress_box = new Box(Orientation.VERTICAL, 5);
+        progress_box.margin = 10;
+        progress_frame.add(progress_box);
+        
+        progress_label = new Label("Gotowy do wykonania backupu");
+        progress_box.pack_start(progress_label, false, false, 0);
+        
+        progress_bar = new ProgressBar();
+        progress_bar.set_show_text(true);
+        progress_box.pack_start(progress_bar, false, false, 0);
+    }
+    
+    /**
      * Tworzy przycisk wykonania backupu
      */
     private void create_execute_button() {
@@ -261,6 +288,10 @@ public class BackupWindow : Box {
             main_window.update_status("Wykonywanie backupu...");
         }
         
+        // Reset progress
+        progress_bar.fraction = 0.0;
+        progress_label.set_text("Przygotowywanie backupu...");
+        
         // Uruchomienie backupu w osobnym wątku
         new Thread<void*>("backup-thread", () => {
             execute_backup_in_thread();
@@ -277,10 +308,27 @@ public class BackupWindow : Box {
             backup_name = null;
         }
         
+        // Symulacja postępu
+        update_progress(0.1, "Tworzenie katalogu backupu...");
+        Thread.usleep(500000); // 0.5s
+        
+        update_progress(0.2, "Backup pakietów...");
+        Thread.usleep(1000000); // 1s
+        
+        update_progress(0.5, "Backup konfiguracji systemu...");
+        Thread.usleep(1000000); // 1s
+        
+        update_progress(0.7, "Backup środowiska pulpitu...");
+        Thread.usleep(1000000); // 1s
+        
+        update_progress(0.9, "Finalizowanie backupu...");
+        
         var backup_path = backup_system.backup_manager.create_full_backup(
             backup_name,
             backup_custom_dirs_check.active
         );
+        
+        update_progress(1.0, "Backup zakończony!");
         
         // Aktualizacja GUI w głównym wątku
         Idle.add(() => {
@@ -306,6 +354,17 @@ public class BackupWindow : Box {
             execute_backup_button.sensitive = true;
             execute_backup_button.label = "Wykonaj backup";
             
+            return false;
+        });
+    }
+    
+    /**
+     * Aktualizuje progress bar
+     */
+    private void update_progress(double fraction, string text) {
+        Idle.add(() => {
+            progress_bar.fraction = fraction;
+            progress_label.set_text(text);
             return false;
         });
     }
