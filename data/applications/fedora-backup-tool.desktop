@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Fedora System Backup Tool
+Name[pl]=Narzędzie Backupu Systemu Fedora
+Comment=Backup and restore tool for Fedora Linux system
+Comment[pl]=Narzędzie do backupu i przywracania systemu Fedora Linux
+Exec=fedora-backup-tool
+Icon=fedora-backup-tool
+Terminal=false
+Categories=System;Backup;Utility;
+Keywords=backup;restore;system;fedora;linux;
+StartupNotify=true
+StartupWMClass=fedora-backup-tool

@@ -1,0 +1,39 @@
+# Build directories
+builddir/
+build/
+_build/
+
+# Compiled files
+*.o
+*.so
+*.a
+*.exe
+
+# Vala generated C files
+*.c
+
+# Meson files
+meson-private/
+meson-logs/
+.ninja_deps
+.ninja_log
+build.ninja
+compile_commands.json
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Fedora System Backup Tool
+Comment=Backup and restore Fedora system
+Exec=fedora-backup-tool
+Icon=fedora-backup-tool
+Terminal=false
+Type=Application
+Categories=System;Utility;

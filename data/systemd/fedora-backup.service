@@ -1,0 +1,15 @@
+[Unit]
+Description=Fedora System Backup Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/fedora-backup-tool --scheduled-backup
+User=root
+Group=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
