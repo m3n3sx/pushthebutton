@@ -261,11 +261,78 @@ public class BackupManager : GLib.Object {
                 logger.log(LogLevel.INFO, "Backup aplikacji Flatpak zakończony");
             }
             
+            // Backup ustawień dconf
+            var dconf_path = Path.build_filename(packages_path, "dconf_settings.txt");
+            var dconf_file = File.new_for_path(dconf_path);
+            
+            Process.spawn_sync(
+                packages_path,
+                {"dconf", "dump", "/"},
+                null,
+                SpawnFlags.SEARCH_PATH,
+                null,
+                out stdout,
+                out stderr,
+                out exit_status
+            );
+            
+            if (exit_status == 0) {
+                var output_stream = dconf_file.create(FileCreateFlags.NONE);
+                var data_output_stream = new DataOutputStream(output_stream);
+                data_output_stream.put_string(stdout);
+                data_output_stream.close();
+                logger.log(LogLevel.INFO, "Backup ustawień dconf zakończony");
+            }
+            
             logger.log(LogLevel.INFO, "Backup pakietów zakończony pomyślnie");
             return true;
             
         } catch (Error e) {
             logger.log(LogLevel.ERROR, "Błąd podczas backupu pakietów: " + e.message);
+            return false;
+        }
+    }
+    
+    /**
+     * Tworzy backup kluczy SSH i historii bash
+     */
+    public bool backup_user_data(string backup_path) {
+        try {
+            logger.log(LogLevel.INFO, "Rozpoczęcie backupu danych użytkownika...");
+            
+            var user_data_path = Path.build_filename(backup_path, "user_data");
+            var user_data_dir = File.new_for_path(user_data_path);
+            if (!user_data_dir.query_exists()) {
+                user_data_dir.make_directory();
+            }
+            
+            var home_dir = Environment.get_home_dir();
+            
+            // Backup kluczy SSH
+            var ssh_source = Path.build_filename(home_dir, ".ssh");
+            var ssh_source_dir = File.new_for_path(ssh_source);
+            if (ssh_source_dir.query_exists()) {
+                var ssh_dest = Path.build_filename(user_data_path, "ssh");
+                var ssh_dest_dir = File.new_for_path(ssh_dest);
+                copy_directory_recursive(ssh_source_dir, ssh_dest_dir);
+                logger.log(LogLevel.INFO, "Backup kluczy SSH zakończony");
+            }
+            
+            // Backup historii bash
+            var bash_history_source = Path.build_filename(home_dir, ".bash_history");
+            var bash_history_file = File.new_for_path(bash_history_source);
+            if (bash_history_file.query_exists()) {
+                var bash_history_dest = Path.build_filename(user_data_path, "bash_history");
+                var bash_history_dest_file = File.new_for_path(bash_history_dest);
+                bash_history_file.copy(bash_history_dest_file, FileCopyFlags.OVERWRITE);
+                logger.log(LogLevel.INFO, "Backup historii bash zakończony");
+            }
+            
+            logger.log(LogLevel.INFO, "Backup danych użytkownika zakończony pomyślnie");
+            return true;
+            
+        } catch (Error e) {
+            logger.log(LogLevel.ERROR, "Błąd podczas backupu danych użytkownika: " + e.message);
             return false;
         }
     }
@@ -588,6 +655,13 @@ public class BackupManager : GLib.Object {
             if (config.backup_desktop) {
                 if (!backup_desktop_environment(backup_path)) {
                     logger.log(LogLevel.ERROR, "Błąd podczas backupu środowiska pulpitu");
+                }
+            }
+            
+            // Backup danych użytkownika
+            if (config.backup_users) {
+                if (!backup_user_data(backup_path)) {
+                    logger.log(LogLevel.ERROR, "Błąd podczas backupu danych użytkownika");
                 }
             }
             

@@ -90,9 +90,16 @@ public class Scheduler : GLib.Object {
         try {
             logger.log(LogLevel.INFO, "Ustawianie harmonogramowania systemd...");
             
+            // Tworzenie katalogu user systemd
+            var user_systemd_dir = Path.build_filename(Environment.get_home_dir(), ".config", "systemd", "user");
+            var systemd_dir = File.new_for_path(user_systemd_dir);
+            if (!systemd_dir.query_exists()) {
+                systemd_dir.make_directory_with_parents();
+            }
+            
             // Tworzenie pliku usługi systemd
             var service_content = generate_systemd_service();
-            var service_file = File.new_for_path("/etc/systemd/system/fedora-backup.service");
+            var service_file = File.new_for_path(Path.build_filename(user_systemd_dir, "fedora-backup.service"));
             var output_stream = service_file.replace(null, false, FileCreateFlags.NONE);
             var data_output_stream = new DataOutputStream(output_stream);
             data_output_stream.put_string(service_content);
@@ -100,18 +107,18 @@ public class Scheduler : GLib.Object {
             
             // Tworzenie pliku timera systemd
             var timer_content = generate_systemd_timer();
-            var timer_file = File.new_for_path("/etc/systemd/system/fedora-backup.timer");
+            var timer_file = File.new_for_path(Path.build_filename(user_systemd_dir, "fedora-backup.timer"));
             output_stream = timer_file.replace(null, false, FileCreateFlags.NONE);
             data_output_stream = new DataOutputStream(output_stream);
             data_output_stream.put_string(timer_content);
             data_output_stream.close();
             
-            // Reload systemd
+            // Reload user systemd
             string stdout, stderr;
             int exit_status;
             Process.spawn_sync(
                 "/",
-                {"systemctl", "daemon-reload"},
+                {"systemctl", "--user", "daemon-reload"},
                 null,
                 SpawnFlags.SEARCH_PATH,
                 null,
@@ -128,7 +135,7 @@ public class Scheduler : GLib.Object {
             // Włączenie timera
             Process.spawn_sync(
                 "/",
-                {"systemctl", "enable", "fedora-backup.timer"},
+                {"systemctl", "--user", "enable", "fedora-backup.timer"},
                 null,
                 SpawnFlags.SEARCH_PATH,
                 null,
@@ -145,7 +152,7 @@ public class Scheduler : GLib.Object {
             // Uruchomienie timera
             Process.spawn_sync(
                 "/",
-                {"systemctl", "start", "fedora-backup.timer"},
+                {"systemctl", "--user", "start", "fedora-backup.timer"},
                 null,
                 SpawnFlags.SEARCH_PATH,
                 null,

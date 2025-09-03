@@ -79,15 +79,45 @@ public class CloudIntegration : GLib.Object {
                 return false;
             }
             
-            // TODO: Implementacja uploadu do NextCloud
-            // INSTRUKCJA INTEGRACJI:
-            // 1. Zainstaluj: sudo dnf install nextcloud-client
-            // 2. Skonfiguruj dane logowania w cloud_config.json
-            // 3. Użyj NextCloud CLI lub WebDAV API do uploadu
-            // 4. Obsłuż błędy połączenia i autoryzacji
+            var file = File.new_for_path(local_file_path);
             
-            logger.log(LogLevel.INFO, "Upload do NextCloud zakończony pomyślnie (placeholder)");
-            return true;
+            if (!file.query_exists()) {
+                logger.log(LogLevel.ERROR, "Plik nie istnieje: " + local_file_path);
+                return false;
+            }
+            
+            var remote_file_path = remote_path ?? Path.get_basename(local_file_path);
+            var webdav_url = config.nextcloud_server + "/remote.php/dav/files/" + config.nextcloud_username + "/" + remote_file_path;
+            
+            // Użycie curl do uploadu przez WebDAV
+            string[] curl_cmd = {
+                "curl",
+                "-X", "PUT",
+                "-u", config.nextcloud_username + ":" + config.nextcloud_password,
+                "-T", local_file_path,
+                webdav_url
+            };
+            
+            string stdout, stderr;
+            int exit_status;
+            Process.spawn_sync(
+                null,
+                curl_cmd,
+                null,
+                SpawnFlags.SEARCH_PATH,
+                null,
+                out stdout,
+                out stderr,
+                out exit_status
+            );
+            
+            if (exit_status == 0) {
+                logger.log(LogLevel.INFO, "Upload do NextCloud zakończony pomyślnie");
+                return true;
+            } else {
+                logger.log(LogLevel.ERROR, "Błąd uploadu NextCloud: " + stderr);
+                return false;
+            }
             
         } catch (Error e) {
             logger.log(LogLevel.ERROR, "Błąd podczas uploadu do NextCloud: " + e.message);
